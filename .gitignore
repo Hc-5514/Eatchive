@@ -1,0 +1,14 @@
+/.gitignore
+/.idea/
+
+### docs ###
+/ARCHITECTURE.md
+/MVP_1st_Planning.md
+
+### codex ###
+/.codex/
+/AGENTS.md
+/server/AGENTS.md
+
+### etc ###
+/server.zip

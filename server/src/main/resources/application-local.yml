@@ -1,0 +1,36 @@
+spring:
+  config:
+    activate:
+      on-profile: local
+  datasource:
+    url: jdbc:postgresql://localhost:5432/eatchive
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: ${RABBITMQ_USERNAME}
+    password: ${RABBITMQ_PASSWORD}
+  flyway:
+    url: jdbc:postgresql://localhost:5432/eatchive
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 50MB
+
+aws:
+  region: ap-northeast-2
+
+eatchive:
+  storage:
+    endpoint: http://localhost:4566
+    path-style-access: true
+    bucket: ${S3_BUCKET_NAME}
+  cors:
+    allowed-origins:
+      - http://localhost:3000
+      - http://127.0.0.1:3000
+  rabbitmq:
+    image:
+      host: localhost
+      management-port: 15672

@@ -12,3 +12,7 @@
 
 ### etc ###
 /server.zip
+/server/.env
+/server/.env.example
+/.DS_Store
+/server/.DS_Store

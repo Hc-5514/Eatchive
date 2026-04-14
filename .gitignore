@@ -1,0 +1,18 @@
+/.gitignore
+/.idea/
+
+### docs ###
+/ARCHITECTURE.md
+/MVP_1st_Planning.md
+
+### codex ###
+/.codex/
+/AGENTS.md
+/server/AGENTS.md
+
+### etc ###
+/server.zip
+/server/.env
+/server/.env.example
+/.DS_Store
+/server/.DS_Store

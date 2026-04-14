@@ -1,0 +1,31 @@
+spring:
+  config:
+    activate:
+      on-profile: test
+  datasource:
+    url: ${TEST_DB_URL}
+    username: ${TEST_DB_USERNAME}
+    password: ${TEST_DB_PASSWORD}
+  test:
+    database:
+      replace: none
+  flyway:
+    enabled: false
+  rabbitmq:
+    host: ${TEST_RABBITMQ_HOST:localhost}
+    port: ${TEST_RABBITMQ_PORT:5672}
+  jpa:
+    properties:
+      hibernate:
+        format_sql: false
+
+management:
+  prometheus:
+    metrics:
+      export:
+        enabled: false
+
+eatchive:
+  storage:
+    bucket: ${S3_BUCKET_NAME}
+    mock: true

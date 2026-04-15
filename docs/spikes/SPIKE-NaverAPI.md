@@ -1,44 +1,80 @@
-# SPIKE-NaverAPI – Naver vs Kakao Local Search Decision
+# SPIKE-NaverAPI - Search/Geocode 의사결정 기록
 
-## Goals
-- Pick the primary place search/geocoding provider for MVP Phase 0.
-- Document quotas, authentication, fallbacks, and monitoring hooks.
-- Define `PlaceApiClient` contract + error catalog alignment.
+## 1) 목적
+- Phase 0에서 장소 검색/지오코딩 경로를 확정한다.
+- Issue #3 완료조건 5개 항목의 증빙 문서로 사용한다.
+- BE-Core(#5), FE-02(#15), OPS-Reliability(#16)가 바로 구현 가능한 계약을 제공한다.
 
-## Summary of Findings
-| Topic | Naver Search API (Local) | Kakao Local API |
+## 2) API 비교
+
+### 2-1. Search vs Geocode (Naver 내부 비교)
+| 항목 | Naver Search API (지역검색) | Naver Maps Geocoding API |
 | --- | --- | --- |
-| Daily quota | 25,000 requests/day per app for Search API (covers local search & manual fallback). [citation] | 100,000 requests/day per keyword search/geocoding endpoint under free tier. Paid upgrade available via Kakao Paid API. [citation] |
-| Authentication | Client ID/Secret headers; per-app quotas; simpler onboarding but lower cap. | REST API key; free quota generous but requires Kakao Map activation + Paid API enablement for scaling, more onboarding steps. [citation] |
-| Latency/coverage | Native fit for Korea (Naver Places). Manual place entry still mandatory for outages. | Also Korea-focused; offers category search; redundant provider if Naver throttles. |
-| Cost | Free within 25k/day; beyond requires commercial arrangement (out of MVP scope). | Free within 100k/day; paid tier billed per call for higher volumes. [citation] |
+| 주 용도 | 키워드 기반 장소 후보 탐색 | 주소 -> 좌표 변환, 좌표 -> 주소(Reverse) |
+| 입력 | 검색어(query), 정렬/페이지 | 주소(query) 또는 좌표 |
+| 출력 | 장소명/카테고리/주소/링크 중심 | 좌표(x,y), 도로명/지번 주소 중심 |
+| 인증 | `X-Naver-Client-Id`, `X-Naver-Client-Secret` | `x-ncp-apigw-api-key-id`, `x-ncp-apigw-api-key` |
+| 쿼터 | 일 25,000 호출(검색 API 공통) | Maps 공통 쿼터/속도 제한 정책 적용(429 Quota/Throttle/Rate 코드) |
+| 비용 | 검색 API 범위 내 무상 사용(상세 상업 조건은 별도) | NCP Maps 과금 체계(환경/요금제 기준, 콘솔/요금계산기 확인 필요) |
+| MVP 역할 | 리뷰 작성 시 장소 후보 제공의 기본 경로 | 수동 입력 보정/주소 정규화 보조 경로 |
 
-**Decision**: Keep Naver Search API as primary because 25k/day covers MVP traffic estimates (≤5k/day). Kakao Local remains contingency for Phase 2 if Naver quota becomes a bottleneck. Manual place entry stays as fallback whenever both APIs fail.
+### 2-2. 기본안 vs 대체안
+| 항목 | 기본안: Naver Search + Geocode | 대체안: Kakao Local |
+| --- | --- | --- |
+| 일 쿼터 레퍼런스 | Search 25,000/day, Maps는 앱 쿼터 정책 기반 | Local API 100,000/day (키워드/지오코딩 계열) |
+| 장애 시 대응 | 수동 장소 입력 fallback + 재시도 정책 | Naver 한도/장애 장기화 시 2차 공급자 후보 |
+| 운영 복잡도 | 현재 스택과 정합, 즉시 적용 가능 | 앱 설정/운영 체크리스트 추가 필요 |
+| 결론 | **MVP 기본 공급자 채택** | Phase 2 이후 확장 카드로 유지 |
 
-## Detailed Analysis
-### Quotas & Scaling
-- **Naver**: Search API (including local search) limited to 25,000 calls/day per application. Monitor daily usage via planned Prometheus counter; alert at 80% threshold. [citation]
-- **Kakao**: Local API endpoints (keyword search, geocode) provide 100,000 free calls/day; exceeding free tier requires enabling Paid API and billing wallet. [citation]
-- **Fallback**: Manual place entry path remains mandatory (already scoped in BE-Core/FE-02) to cover quota exhaustion or network failures.
+## 3) 실패/레이트리밋/백오프 정책
 
-### Authentication & Operational Notes
-- **Naver**: Use X-Naver-Client-Id/Secret. Rotate secrets via GitHub Actions secrets -> Docker Compose env.
-- **Kakao**: Requires Kakao Dev app with Map APIs enabled and Paid API toggle for higher tiers. Additional compliance overhead; keep as contingency only. [citation]
+### 3-1. 정책 테이블
+| 시나리오 | 감지 신호 | 재시도 | 백오프 | 중단/전환 조건 | 표준 오류 코드 |
+| --- | --- | --- | --- | --- | --- |
+| Timeout | 소켓/읽기 타임아웃 | 예 | 1s -> 2s -> 4s (최대 3회) | 3회 실패 시 수동 입력 유도 | `PLACE_API_TIMEOUT` |
+| Upstream 5xx | HTTP 500/503/504 | 예 | 1s -> 2s -> 4s (최대 3회) | 3회 실패 시 수동 입력 유도 | `PLACE_API_UPSTREAM_ERROR` |
+| Quota/Rate Limit | HTTP 429 | 부분(1회) | 2s 1회 후 종료 | 동일 요청 2회 연속 429면 즉시 수동 입력 | `PLACE_API_RATE_LIMIT` |
+| Client 4xx(입력오류) | HTTP 400/401/403/404 | 아니오 | 없음 | 즉시 종료, 입력 수정 유도 | `PLACE_API_BAD_REQUEST` |
 
-### Error Classification
-| Error Code | Upstream Trigger | Backend Response | Frontend Action |
-| --- | --- | --- | --- |
-| `[NAVER_API_TIMEOUT]` | HTTP timeout >3s | 502 with retry metadata | Show toast “검색 지연”, surface manual entry |
-| `[NAVER_API_SERVER_ERROR]` | 5xx | 502 + fallback to manual entry | Toast w/ retry CTA |
-| `[NAVER_API_QUOTA]` | 429 | 502 w/ message “한도 초과” | Force manual input |
-| `[NAVER_API_CLIENT_ERROR]` | 4xx except 429 | 502 w/ “요청 오류” | Toast |
+### 3-2. 정책 근거
+- 사용자 대기시간 상한: 재시도 총 대기시간을 7초(1+2+4)로 제한한다.
+- 공급자 보호: 429에는 공격적 재시도를 피하고 1회만 허용한다.
+- 서비스 연속성: 실패 시 반드시 수동 장소 입력 경로를 노출한다.
+- 관측성: `place_api_requests_total{provider,status}`와 `place_api_fallback_total{reason}` 지표를 기록한다.
 
-Same codes reused for Kakao if/when adopted; prefix will stay `[NAVER_API_*]` until a second provider ships, then expand to provider-agnostic names.
+## 4) PlaceApiClient 계약/DTO/오류 분류
 
-### Gradle Dependency-Management Plugin Alignment
-- Generated reference project via `start.spring.io` (Boot 3.5.13, Java 17). The emitted `build.gradle` used `io.spring.dependency-management` **1.1.7**, which matches our current `server/build.gradle`. No change required; recorded here for traceability.
+### 4-1. 계약 요약
+- 코드: `server/src/main/java/com/eatchive/server/infra/place/PlaceApiClient.java`
+- `searchPlaces(query)`: 장소 후보 조회
+- `geocode(query)`: 주소/좌표 정규화
+- DTO 초안: `SearchPlacesQuery`, `PlaceSearchResult`, `PlaceSummary`, `GeocodeQuery`, `GeocodeResult`
 
-### Next Steps & Follow-ups
-1. Implement `PlaceApiClient` contract (this spike delivers interface stub).
-2. Add Prometheus counter `naver_search_api_requests_total{status=...}` in BE-Core once API integration begins.
-3. If throughput nears 25k/day, open DEV-Infra follow-up to enable Kakao Paid API for redundancy.
+### 4-2. 오류 분류 표준
+- 공급자별 코드(`NAVER_*`)를 직접 노출하지 않는다.
+- 서비스 외부(응답/프론트 계약)에는 아래 표준 코드만 사용한다.
+  - `PLACE_API_TIMEOUT`
+  - `PLACE_API_UPSTREAM_ERROR`
+  - `PLACE_API_RATE_LIMIT`
+  - `PLACE_API_BAD_REQUEST`
+
+## 5) dependency-management 버전 기록 (start.spring.io)
+- start.spring.io 기준(Boot 3.5.13, Java 17)에서 `io.spring.dependency-management`는 `1.1.7`.
+- 현재 서버 설정과 일치: `server/build.gradle`의 `id 'io.spring.dependency-management' version '1.1.7'`.
+
+## 6) 의존 이슈 공유 항목 (PM 전파용)
+- BE-Core(#5): 표준 오류 코드 4종 + retry/fallback 정책을 서비스/예외 처리 계층에 반영.
+- FE-02(#15): `PLACE_API_*` 코드 기준 사용자 메시지/수동입력 전환 UX 고정.
+- OPS-Reliability(#16): 429/timeout 비율과 fallback 지표를 운영 경보 기준으로 포함.
+
+## 7) 출처 (조회일: 2026-04-15)
+1. Naver 검색 API 지역검색(일 25,000 호출)
+- https://developers.naver.com/docs/serviceapi/search/local/local.md
+2. Naver Maps 개요(429 Quota/Throttle/Rate, 인증 헤더)
+- https://api.ncloud-docs.com/docs/en/ainaverapi-maps-overview
+3. Kakao Local 개요(로컬 기능/사전 설정)
+- https://developers.kakao.com/docs/latest/en/local/common
+4. Kakao 쿼터/유료 API 단가(Local 100,000/day 포함)
+- https://developers.kakao.com/docs/latest/en/getting-started/quota
+5. NAVER Cloud 요금 계산/과금 안내(Maps 과금 확인 경로)
+- https://www.ncloud.com/charge/calc

@@ -82,13 +82,32 @@ public interface PlaceApiClient {
             String coordinateSource
     ) { }
 
+    /**
+     * Provider-agnostic external place API error categories.
+     * Concrete providers must be mapped into one of these types.
+     */
+    enum ErrorType {
+        PLACE_API_TIMEOUT,
+        PLACE_API_UPSTREAM_ERROR,
+        PLACE_API_RATE_LIMIT,
+        PLACE_API_BAD_REQUEST
+    }
+
     class PlaceApiException extends RuntimeException {
-        public PlaceApiException(String message) {
+        private final ErrorType errorType;
+
+        public PlaceApiException(ErrorType errorType, String message) {
             super(message);
+            this.errorType = errorType;
         }
 
-        public PlaceApiException(String message, Throwable cause) {
+        public PlaceApiException(ErrorType errorType, String message, Throwable cause) {
             super(message, cause);
+            this.errorType = errorType;
+        }
+
+        public ErrorType getErrorType() {
+            return errorType;
         }
     }
 }
